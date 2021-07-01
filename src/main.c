@@ -992,7 +992,7 @@ void Output_Info(double A, double Z) {
   MPI_Allgather(&NumPart, 1, MPI_UNSIGNED, Noutput_table, 1, MPI_UNSIGNED, MPI_COMM_WORLD);
 
   if (ThisTask == 0) {
-    sprintf(buf, "%s/%s_z%dp%03d.info", OutputDir, FileBase, (int)Z, (int)rint((Z-(int)Z)*1000));
+    sprintf(buf, "%s/%s_z%.2e_info.txt", OutputDir, FileBase, Z);
     if(!(fp = fopen(buf, "w"))) {
       printf("\nERROR: Can't write in file '%s'.\n\n", buf);
       FatalError((char *)"main.c", 876);
