@@ -750,56 +750,88 @@ void Output(double A, double Z, double Dv, double Dv2) {
 #endif
 #endif
 
-  nprocgroup = NTask / NumFilesWrittenInParallel;
-  if (NTask % NumFilesWrittenInParallel) nprocgroup++;
-  masterTask = (ThisTask / nprocgroup) * nprocgroup;
 
-  if (ThisTask == 0)
-	  printf("\n\n%d %d, %d %d\n\n", NumFilesWrittenInParallel, NTask, nprocgroup, masterTask);
+  unsigned int num_tasks_per_file = NTask / NumFilesWrittenInParallel;
+  unsigned int this_file;
+  unsigned int this_writer;
+  {
+    unsigned int num_remainder_tasks = NTask % NumFilesWrittenInParallel;
+    unsigned int task_sum = 0;
+    unsigned int next_sum;
+    for (this_file = 0; this_file < NumFilesWrittenInParallel; this_file++) {
+      next_sum = num_tasks_per_file;
+      if (this_file < num_remainder_tasks)
+        next_sum++;
+      next_sum += task_sum;
+      if (next_sum > ThisTask) {
+        this_writer = task_sum;
+        break;
+      }
+      task_sum = next_sum;
+    }
+    if (this_file < num_remainder_tasks)
+      num_tasks_per_file++;
+  }
+  unsigned int next_task = ThisTask + 1;
+  unsigned int previous_task = ThisTask - 1;
+  if (next_task == this_writer + num_tasks_per_file)
+    next_task = this_writer;
+  if (this_writer == ThisTask)
+    previous_task = this_writer + num_tasks_per_file - 1;
 
-  for(groupTask = 0; groupTask < nprocgroup; groupTask++) {
-    if (ThisTask == (masterTask + groupTask)) {
-      if(NumPart > 0) {
-        sprintf(buf, "%s/%s_z%.2e.%d", OutputDir, FileBase, Z,  ThisTask);
-        if(!(fp = fopen(buf, "w"))) {
-          printf("\nERROR: Can't write in file '%s'.\n\n", buf);
-          FatalError((char *)"main.c", 735);
-        }
-        fflush(stdout);
+        sprintf(buf, "%s/%s_z%.2e.%d", OutputDir, FileBase, Z,  this_file);
 #ifdef GADGET_STYLE
-        // Gadget header stuff
-        for(k = 0; k < 6; k++) {
-          header.npart[k] = 0;
-          header.npartTotal[k] = 0;
-          header.mass[k] = 0;
+        if (this_writer == ThisTask) {
+          if(!(fp = fopen(buf, "w"))) {
+            printf("\nERROR: Can't write in file '%s'.\n\n", buf);
+            FatalError((char *)"main.c", 735);
+          }
+          fflush(stdout);
+          // Gadget header stuff
+          for(k = 0; k < 6; k++) {
+            header.npart[k] = 0;
+            header.npartTotal[k] = 0;
+            header.mass[k] = 0;
+          }
+          header.npart[1] = NumPart;
+          for (int subtask = next_task; subtask < ThisTask + num_tasks_per_file; subtask++) {
+          	MPI_Recv(&dummy, 1, MPI_INT, subtask, 0, MPI_COMM_WORLD, &status);
+			header.npart[1] += dummy;
+		  }
+	      MPI_Send(&header.npart[1], 1, MPI_INT, previous_task, 0, MPI_COMM_WORLD);
+          header.npartTotal[1] = (unsigned int) TotNumPart;
+          header.mass[1] = (3.0*Omega*Hubble*Hubble*Box*Box*Box) / (8.0*PI*G*TotNumPart);
+          header.time = A;
+          header.redshift = Z;
+
+          header.flag_sfr = 0;
+          header.flag_feedback = 0;
+          header.flag_cooling = 0;
+          //header.flag_stellarage = 0;
+          //header.flag_metals = 0;
+          //header.flag_stellarage = 0;
+          //header.flag_metals = 0;
+          //header.flag_entropy_instead_u = 0;
+
+          header.num_files = NumFilesWrittenInParallel;
+          header.num_blocks = 3;
+          header.seed = Seed;
+
+          header.BoxSize = Box;
+          header.Omega0 = Omega;
+          header.OmegaLambda = OmegaLambda;
+          header.HubbleParam = HubbleParam;
+
+          dummy = sizeof(header);
+          my_fwrite(&dummy, sizeof(dummy), 1, fp);
+          my_fwrite(&header, sizeof(header), 1, fp);
+          my_fwrite(&dummy, sizeof(dummy), 1, fp);
         }
-        header.npart[1] = NumPart;
-        header.npartTotal[1] = (unsigned int) TotNumPart;
-        header.npartTotalHighWord[1] = (unsigned int) (TotNumPart >> 32);
-        header.mass[1] = (3.0*Omega*Hubble*Hubble*Box*Box*Box) / (8.0*PI*G*TotNumPart);
-        header.time = A;
-        header.redshift = Z;
-
-        header.flag_sfr = 0;
-        header.flag_feedback = 0;
-        header.flag_cooling = 0;
-        header.flag_stellarage = 0;
-        header.flag_metals = 0;
-        header.flag_stellarage = 0;
-        header.flag_metals = 0;
-        header.flag_entropy_instead_u = 0;
-
-        header.num_files = NTaskWithN;
-
-        header.BoxSize = Box;
-        header.Omega0 = Omega;
-        header.OmegaLambda = OmegaLambda;
-        header.HubbleParam = HubbleParam;
-
-        dummy = sizeof(header);
-        my_fwrite(&dummy, sizeof(dummy), 1, fp);
-        my_fwrite(&header, sizeof(header), 1, fp);
-        my_fwrite(&dummy, sizeof(dummy), 1, fp);
+		else {
+	        MPI_Send(&NumPart, 1, MPI_INT, this_writer, 0, MPI_COMM_WORLD);
+			if (this_writer == next_task)
+              MPI_Recv(&header.npart[1], 1, MPI_INT, this_writer, 0, MPI_COMM_WORLD, &status);
+		}
 
         // We may have some spare memory from deallocating the force grids so use that for outputting
         // If not we are a little more conservative
@@ -811,24 +843,46 @@ void Output(double A, double Z, double Dv, double Dv2) {
         blockmaxlen = bytes / (3 * sizeof(float));
 
         // Remember to add the ZA and 2LPT velocities back on and convert to PTHalos velocity units
-
+		
+		if(this_writer != ThisTask) {
+          MPI_Recv(&dummy, 1, MPI_INT, previous_task, 0, MPI_COMM_WORLD, &status);
+          if(!(fp = fopen(buf, "a"))) {
+            printf("\nERROR: Can't write in file '%s'.\n\n", buf);
+            FatalError((char *)"main.c", 735);
+          }
+        }
+        else {
+          dummy = sizeof(float) * 3 * header.npart[1];
+          my_fwrite(&dummy, sizeof(dummy), 1, fp);
+          printf("\n\n%u %u %u\n\n", this_file, header.npart[1], dummy);
+        }
         // write coordinates
-        dummy = sizeof(float) * 3 * NumPart;
-        my_fwrite(&dummy, sizeof(dummy), 1, fp);
         for(n = 0, pc = 0; n < NumPart; n++) {
           for(k = 0; k < 3; k++) block[3 * pc + k] = (float)(lengthfac*P[n].Pos[k]);
           pc++;
           if(pc == blockmaxlen) {
             my_fwrite(block, sizeof(float), 3 * pc, fp);
-	    pc = 0;
-	  }
+	        pc = 0;
+	      }
         }
         if(pc > 0) my_fwrite(block, sizeof(float), 3 * pc, fp);
-        my_fwrite(&dummy, sizeof(dummy), 1, fp);
-
+		if (this_writer == next_task) {
+          dummy = sizeof(float) * 3 * header.npart[1];
+          my_fwrite(&dummy, sizeof(dummy), 1, fp);
+        }
+        fclose(fp);
+        MPI_Send(&dummy, 1, MPI_INT, next_task, 0, MPI_COMM_WORLD);
+        MPI_Recv(&dummy, 1, MPI_INT, previous_task, 0, MPI_COMM_WORLD, &status);
+       
         // write velocities
-        my_fwrite(&dummy, sizeof(dummy), 1, fp);
-		//printf("%12.6lf, %12.6lf, %12.6lf\n", sumx, sumy, sumz);
+        if (!(fp = fopen(buf, "a"))) {
+          printf("\nERROR: Can't write in file '%s'.\n\n", buf);
+          FatalError((char *)"main.c", 735);
+        }
+		if (this_writer == ThisTask) {
+          dummy = sizeof(float) * 3 * header.npart[1];
+          my_fwrite(&dummy, sizeof(dummy), 1, fp);
+        }
         for(n = 0, pc = 0; n < NumPart; n++) {
           block[3 * pc] = (float)(velfac*fac*(P[n].Vel[0]-sumx+(P[n].Dz[0]*Dv+P[n].D2[0]*Dv2)*UseCOLA));
           block[3 * pc + 1] = (float)(velfac*fac*(P[n].Vel[1]-sumy+(P[n].Dz[1]*Dv+P[n].D2[1]*Dv2)*UseCOLA));
@@ -840,16 +894,28 @@ void Output(double A, double Z, double Dv, double Dv2) {
           }
         }
         if(pc > 0) my_fwrite(block, sizeof(float), 3 * pc, fp);
-        my_fwrite(&dummy, sizeof(dummy), 1, fp);
-
-
+		if (this_writer == next_task) {
+          dummy = sizeof(float) * 3 * header.npart[1];
+          my_fwrite(&dummy, sizeof(dummy), 1, fp);
+        }
+        fclose(fp);
+        if (next_task != this_writer)
+        	MPI_Send(&dummy, 1, MPI_INT, next_task, 0, MPI_COMM_WORLD);
 #ifdef PARTICLE_ID
+        if (next_task == this_writer)
+        	MPI_Send(&dummy, 1, MPI_INT, next_task, 0, MPI_COMM_WORLD);
+        MPI_Recv(&dummy, 1, MPI_INT, previous_task, 0, MPI_COMM_WORLD, &status);
+        if(!(fp = fopen(buf, "a"))) {
+          printf("\nERROR: Can't write in file '%s'.\n\n", buf);
+          FatalError((char *)"main.c", 735);
+        }
         blockid = (unsigned *)block;
         blockmaxlen = bytes / sizeof(unsigned);
-
         // write particle ID
-        dummy = sizeof(unsigned) * NumPart;
-        my_fwrite(&dummy, sizeof(dummy), 1, fp);
+		if (this_writer == ThisTask) {
+          dummy = sizeof(unsigned) * header.npart[1];
+          my_fwrite(&dummy, sizeof(dummy), 1, fp);
+        }
         for(n = 0, pc = 0; n < NumPart; n++) {
           blockid[pc] = P[n].ID;
           pc++;
@@ -859,14 +925,28 @@ void Output(double A, double Z, double Dv, double Dv2) {
           }
         }
         if(pc > 0) my_fwrite(blockid, sizeof(unsigned), pc, fp);
-        my_fwrite(&dummy, sizeof(dummy), 1, fp);
+		if (this_writer == next_task) {
+          dummy = sizeof(unsigned) * header.npart[1];
+          my_fwrite(&dummy, sizeof(dummy), 1, fp);
+        }
+        fclose(fp);
+        if (next_task != this_writer)
+        	MPI_Send(&dummy, 1, MPI_INT, next_task, 0, MPI_COMM_WORLD);
 #elif LONG_PARTICLE_ID
+        if (next_task == this_writer)
+        	MPI_Send(&dummy, 1, MPI_INT, next_task, 0, MPI_COMM_WORLD);
+        MPI_Recv(&dummy, 1, MPI_INT, previous_task, 0, MPI_COMM_WORLD, &status);
+        if(!(fp = fopen(buf, "a"))) {
+          printf("\nERROR: Can't write in file '%s'.\n\n", buf);
+          FatalError((char *)"main.c", 735);
+        }
         blockid = (unsigned long long *)block;
         blockmaxlen = bytes / sizeof(unsigned long long);
-
         // write particle ID
-        dummy = sizeof(unsigned long long) * NumPart;
-        my_fwrite(&dummy, sizeof(dummy), 1, fp);
+		if (this_writer == ThisTask) {
+          dummy = sizeof(unsigned long long) * header.npart[1];
+          my_fwrite(&dummy, sizeof(dummy), 1, fp);
+        }
         for(n = 0, pc = 0; n < NumPart; n++) {
           blockid[pc] = P[n].ID;
           pc++;
@@ -876,37 +956,22 @@ void Output(double A, double Z, double Dv, double Dv2) {
           }
         }
         if(pc > 0) my_fwrite(blockid, sizeof(unsigned long long), pc, fp);
-        my_fwrite(&dummy, sizeof(dummy), 1, fp);
+		if (this_writer == next_task) {
+          dummy = sizeof(unsigned long long) * header.npart[1];
+          my_fwrite(&dummy, sizeof(dummy), 1, fp);
+        }
+        fclose(fp);
+        if (next_task != this_writer)
+        	MPI_Send(&dummy, 1, MPI_INT, next_task, 0, MPI_COMM_WORLD);
 #endif
-
-
-
-
         free(block);   
 #else
-        for(n=0; n<NumPart; n++){
-          double P_Vel[3];
-          P_Vel[0] = fac*(P[n].Vel[0]-sumx+(P[n].Dz[0]*Dv+P[n].D2[0]*Dv2)*UseCOLA);
-          P_Vel[1] = fac*(P[n].Vel[1]-sumy+(P[n].Dz[1]*Dv+P[n].D2[1]*Dv2)*UseCOLA);
-          P_Vel[2] = fac*(P[n].Vel[2]-sumz+(P[n].Dz[2]*Dv+P[n].D2[2]*Dv2)*UseCOLA);
-#ifdef PARTICLE_ID
-          fprintf(fp,"%12u %15.6f %15.6f %15.6f %15.6f %15.6f %15.6f\n",
-                      P[n].ID, (float)(lengthfac*P[n].Pos[0]),(float)(lengthfac*P[n].Pos[1]),(float)(lengthfac*P[n].Pos[2]),(float)(velfac*P_Vel[0]),(float)(velfac*P_Vel[1]),(float)(velfac*P_Vel[2]));
-#elif  LONG_PARTICLE_ID
-          fprintf(fp,"%12llu %15.6f %15.6f %15.6f %15.6f %15.6f %15.6f\n",
-                      P[n].ID, (float)(lengthfac*P[n].Pos[0]),(float)(lengthfac*P[n].Pos[1]),(float)(lengthfac*P[n].Pos[2]),(float)(velfac*P_Vel[0]),(float)(velfac*P_Vel[1]),(float)(velfac*P_Vel[2]));
-#else
-          fprintf(fp,"%15.6f %15.6f %15.6f %15.6f %15.6f %15.6f\n",
-                      (float)(lengthfac*P[n].Pos[0]),(float)(lengthfac*P[n].Pos[1]),(float)(lengthfac*P[n].Pos[2]),(float)(velfac*P_Vel[0]),(float)(velfac*P_Vel[1]),(float)(velfac*P_Vel[2]));
+
+// Can write unformatted output if desired
+
 #endif
-        }
-#endif
-        fclose(fp);
-      }
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-  }
- 
+
+  MPI_Barrier(MPI_COMM_WORLD);
   Output_Info(A, Z);
 
   return;

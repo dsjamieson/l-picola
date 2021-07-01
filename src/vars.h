@@ -122,11 +122,9 @@ extern struct io_header_1 {
   double Omega0;              // matter density
   double OmegaLambda;         // vacuum energy density
   double HubbleParam;         // little 'h'
-  int flag_stellarage;        // flags whether the age of newly formed stars is recorded and saved
-  int flag_metals;                     // flags whether metal enrichment is included
-  unsigned int npartTotalHighWord[6];  // High word of the total number of particles of each type
-  int  flag_entropy_instead_u;         // flags that IC-file contains entropy instead of u
-  char fill[60];                       // fills to 256 Bytes
+  int num_blocks;                      // Added for reading easily
+  unsigned seed;                       // Random seed
+  char fill[88];                       // fills to 256 Bytes
 }
 header;
 #endif
