@@ -119,4 +119,4 @@ double TransferFunc_EH(double k);
 double PowerSpec_Tabulated(double k);
 double PowerSpec_Efstathiou(double k);
 double TransferFunc_Tabulated(double k);
-double sigma2_int(double k, void * params);
+double sigma2_int(double logk, void * params);

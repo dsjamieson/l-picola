@@ -198,7 +198,9 @@ int main(int argc, char **argv) {
         coord = (i * Nsample + j) * Nsample + k;
 
 #ifdef PARTICLE_ID          
-        P[coord].ID = ((unsigned long long)((i + Local_p_start) * Nsample + j)) * (unsigned long long)Nsample + (unsigned long long)k + 1;
+        P[coord].ID = ((unsigned)((i + Local_p_start) * Nsample + j)) * (unsigned)Nsample + (unsigned)k;
+#elif LONG_PARTICLE_ID
+        P[coord].ID = ((unsigned long long)((i + Local_p_start) * Nsample + j)) * (unsigned long long)Nsample + (unsigned long long)k;
 #endif
 
         for (m=0; m<3; m++) {
@@ -742,17 +744,23 @@ void Output(double A, double Z, double Dv, double Dv2) {
   int k, pc, dummy, blockmaxlen;
   float * block;
 #ifdef PARTICLE_ID
-  unsigned long long * blockid;
+  unsigned * blockid;
+#elif LONG_PARTICLE_ID
+  unsigned long long ID;   // The Particle ID
 #endif
 #endif
 
   nprocgroup = NTask / NumFilesWrittenInParallel;
   if (NTask % NumFilesWrittenInParallel) nprocgroup++;
   masterTask = (ThisTask / nprocgroup) * nprocgroup;
+
+  if (ThisTask == 0)
+	  printf("\n\n%d %d, %d %d\n\n", NumFilesWrittenInParallel, NTask, nprocgroup, masterTask);
+
   for(groupTask = 0; groupTask < nprocgroup; groupTask++) {
     if (ThisTask == (masterTask + groupTask)) {
       if(NumPart > 0) {
-        sprintf(buf, "%s/%s_z%dp%03d.%d", OutputDir, FileBase, (int)Z, (int)rint((Z-(int)Z)*1000), ThisTask);
+        sprintf(buf, "%s/%s_z%.2e.%d", OutputDir, FileBase, Z,  ThisTask);
         if(!(fp = fopen(buf, "w"))) {
           printf("\nERROR: Can't write in file '%s'.\n\n", buf);
           FatalError((char *)"main.c", 735);
@@ -820,7 +828,7 @@ void Output(double A, double Z, double Dv, double Dv2) {
 
         // write velocities
         my_fwrite(&dummy, sizeof(dummy), 1, fp);
-	printf("%12.6lf, %12.6lf, %12.6lf\n", sumx, sumy, sumz);
+		//printf("%12.6lf, %12.6lf, %12.6lf\n", sumx, sumy, sumz);
         for(n = 0, pc = 0; n < NumPart; n++) {
           block[3 * pc] = (float)(velfac*fac*(P[n].Vel[0]-sumx+(P[n].Dz[0]*Dv+P[n].D2[0]*Dv2)*UseCOLA));
           block[3 * pc + 1] = (float)(velfac*fac*(P[n].Vel[1]-sumy+(P[n].Dz[1]*Dv+P[n].D2[1]*Dv2)*UseCOLA));
@@ -834,7 +842,25 @@ void Output(double A, double Z, double Dv, double Dv2) {
         if(pc > 0) my_fwrite(block, sizeof(float), 3 * pc, fp);
         my_fwrite(&dummy, sizeof(dummy), 1, fp);
 
+
 #ifdef PARTICLE_ID
+        blockid = (unsigned *)block;
+        blockmaxlen = bytes / sizeof(unsigned);
+
+        // write particle ID
+        dummy = sizeof(unsigned) * NumPart;
+        my_fwrite(&dummy, sizeof(dummy), 1, fp);
+        for(n = 0, pc = 0; n < NumPart; n++) {
+          blockid[pc] = P[n].ID;
+          pc++;
+          if(pc == blockmaxlen) {
+            my_fwrite(blockid, sizeof(unsigned), pc, fp);
+            pc = 0;
+          }
+        }
+        if(pc > 0) my_fwrite(blockid, sizeof(unsigned), pc, fp);
+        my_fwrite(&dummy, sizeof(dummy), 1, fp);
+#elif LONG_PARTICLE_ID
         blockid = (unsigned long long *)block;
         blockmaxlen = bytes / sizeof(unsigned long long);
 
@@ -853,6 +879,9 @@ void Output(double A, double Z, double Dv, double Dv2) {
         my_fwrite(&dummy, sizeof(dummy), 1, fp);
 #endif
 
+
+
+
         free(block);   
 #else
         for(n=0; n<NumPart; n++){
@@ -861,6 +890,9 @@ void Output(double A, double Z, double Dv, double Dv2) {
           P_Vel[1] = fac*(P[n].Vel[1]-sumy+(P[n].Dz[1]*Dv+P[n].D2[1]*Dv2)*UseCOLA);
           P_Vel[2] = fac*(P[n].Vel[2]-sumz+(P[n].Dz[2]*Dv+P[n].D2[2]*Dv2)*UseCOLA);
 #ifdef PARTICLE_ID
+          fprintf(fp,"%12u %15.6f %15.6f %15.6f %15.6f %15.6f %15.6f\n",
+                      P[n].ID, (float)(lengthfac*P[n].Pos[0]),(float)(lengthfac*P[n].Pos[1]),(float)(lengthfac*P[n].Pos[2]),(float)(velfac*P_Vel[0]),(float)(velfac*P_Vel[1]),(float)(velfac*P_Vel[2]));
+#elif  LONG_PARTICLE_ID
           fprintf(fp,"%12llu %15.6f %15.6f %15.6f %15.6f %15.6f %15.6f\n",
                       P[n].ID, (float)(lengthfac*P[n].Pos[0]),(float)(lengthfac*P[n].Pos[1]),(float)(lengthfac*P[n].Pos[2]),(float)(velfac*P_Vel[0]),(float)(velfac*P_Vel[1]),(float)(velfac*P_Vel[2]));
 #else

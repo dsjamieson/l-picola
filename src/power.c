@@ -154,15 +154,15 @@ void read_transfer_table(void) {
 
   klower = pow(10.0, TransferTable[0].logk) * 1.0000001 * (3.085678e24/InputSpectrum_UnitLength_in_cm);
 
-  if(ThisTask == 0) printf("klower for transfer function is %lf h/Mpc...\n", klower);
+  if(ThisTask == 0) printf("klower for transfer function is %g h/Mpc...\n", klower);
 
-  if((TransferTable[0].logk + log10(3.085678e24/InputSpectrum_UnitLength_in_cm)) > -4.0 ) {
+  if((TransferTable[0].logk + log10(3.085678e24/InputSpectrum_UnitLength_in_cm)) > -5.0 ) {
     if (ThisTask == 0) {
       printf("\nWARNING: klower may be too large to normalize power.\n");
       printf("         Values outside the input range will be taken to be zero.\n\n");
     }
   }
-  if((TransferTable[NTransferTable].logk + log10(3.085678e24/InputSpectrum_UnitLength_in_cm)) <= log10(500./8.)) {
+  if((TransferTable[NTransferTable-1].logk + log10(3.085678e24/InputSpectrum_UnitLength_in_cm)) < 2.) {
     if (ThisTask == 0) {
       printf("\nWARNING: kmax may be too small to normalize power.\n");
       printf("         Values outside the input range will be taken to be zero.\n\n");
@@ -265,10 +265,10 @@ void initialize_powerspectrum(void) {
 
   Norm = 1.0;
   res = TopHatSigma2(R8);
-  if(ThisTask == 0) printf("Normalization of spectrum from file: Sigma8 = %lf...\n",sqrt(res));
+  if(ThisTask == 0) printf("Normalization of spectrum from file: Sigma8 = %g...\n",sqrt(res));
 
   Norm = Sigma8 * Sigma8 / res;
-  if(ThisTask == 0) printf("Normalization adjusted to Sigma8=%lf (Normfac=%lf)...\n",Sigma8,Norm);
+  if(ThisTask == 0) printf("Normalization adjusted to Sigma8=%g (Normfac=%g)...\n",Sigma8,Norm);
   Norm *= pow(3.085678e24/UnitLength_in_cm,3.0);
   if(ThisTask == 0) printf("Normalization adjusted to correct for unit difference: InputSpec=%g, UnitLength=%g (Normfac=%g)...\n",InputSpectrum_UnitLength_in_cm,UnitLength_in_cm,Norm);
 
@@ -359,14 +359,15 @@ void read_power_table(void) {
   klower = pow(10.0, PowerTable[0].logk) * 1.0000001 * (3.085678e24/InputSpectrum_UnitLength_in_cm);
 
   if(ThisTask == 0) printf("klower for power spectrum is %f h/Mpc...\n",klower);
+  if(ThisTask == 0) printf("kupper for power spectrum is %f h/Mpc...\n", pow(10.0, PowerTable[NTransferTable - 1].logk) * 0.99999999 * (3.085678e24/InputSpectrum_UnitLength_in_cm));
 
-  if((PowerTable[0].logk + log10(3.085678e24/InputSpectrum_UnitLength_in_cm)) > -4.0 ) {
+  if((PowerTable[0].logk + log10(3.085678e24/InputSpectrum_UnitLength_in_cm)) > -5.0 ) {
     if (ThisTask == 0) {
       printf("\nWARNING: klower may be too large to normalize power.\n");
       printf("         Values outside the input range will be taken to be zero.\n\n");
     }
   }
-  if((PowerTable[NTransferTable].logk + log10(3.085678e24/InputSpectrum_UnitLength_in_cm)) <= log10(500.0/8.0)) {
+  if((PowerTable[NTransferTable-1].logk + log10(3.085678e24/InputSpectrum_UnitLength_in_cm)) <= 2.) {
     if (ThisTask == 0) {
       printf("\nWARNING: kmax may be too small to normalize the power.\n");
       printf("         Values outside the input range will be taken to be zero.\n\n");
@@ -502,41 +503,33 @@ double TransferFunc_EH(double k) {
 // Return the integral over a Tophat profile
 // ==========================================
 double TopHatSigma2(double R) {
-  double alpha=0.0, limit;
+  double alpha=0.0;
   double result, error;
+  long int num_eval;
 
-  r_tophat = R;     
-  limit = 500.0/R;           // NB: 500/R is chosen as the integration boundary (infinity)
+  r_tophat = R;
 
   gsl_function F;
-  gsl_integration_cquad_workspace * w = gsl_integration_cquad_workspace_alloc(1000);
-     
   F.function = &sigma2_int;
   F.params = &alpha;
-     
-  gsl_integration_cquad(&F,0,limit,1e-6,1e-6,w,&result,&error,NULL); 
-     
-  gsl_integration_cquad_workspace_free (w);
-      
+
+  gsl_integration_romberg_workspace * rw = gsl_integration_romberg_alloc(12);
+  gsl_integration_romberg(&F, -5.0, 2.0, 1e-12, 1e-12, &result, &num_eval, rw);
+  gsl_integration_romberg_free(rw);
+
   return result/(2.0*PI*PI);	
 }
 
 // The Tophat profile
 // ==================
-double sigma2_int(double k, void * params) {
-
-  double kr, kr3, kr2, w, x;
-
+double sigma2_int(double logk, void * params) {
+  double k, kr, kr3, kr2, w, x;
+  k = exp(logk);
   kr = r_tophat * k;
   kr2 = kr * kr;
   kr3 = kr2 * kr;
-
   if(kr < 1e-8) return 0;
-
   w = 3 * (sin(kr) / kr3 - cos(kr) / kr2);
-  x = k * k * w * w * PowerSpec(k*UnitLength_in_cm/3.085678e24);
-
-  //if (ThisTask == 0) printf("%lf, %lf\n" k, x);
-
+  x = k * k * k * w * w * PowerSpec(k*UnitLength_in_cm/3.085678e24);
   return x;
 }
